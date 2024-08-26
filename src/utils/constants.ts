@@ -22,6 +22,10 @@ export const COMMON_MESSAGE = {
   },
 };
 
+export const ERROR_MESSAGE = {
+  NOT_FOUND: (entityName: string) => `${entityName} not found`,
+};
+
 export const dbConfig: DataSourceOptions = {
   type: 'postgres',
   host: process.env.TYPE_ORM_DATABASE_HOST,
