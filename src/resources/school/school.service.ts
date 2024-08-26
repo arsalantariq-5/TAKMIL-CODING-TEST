@@ -11,47 +11,22 @@ import { UpdateSchoolDto } from './dto/update-school.dto';
 @Injectable()
 export class SchoolService {
 
-  constructor(private readonly queryRunner: QueryRunnerService) {}
+  constructor(private readonly queryRunner: QueryRunnerService) { }
   logger = new Logger(SchoolService.name);
 
   async create(createSchoolDto: CreateSchoolDto): Promise<ResponseDto> {
     const queryRunner = this.queryRunner.createQueryRunner();
-  
+
     try {
-      const { name, address, organization } = createSchoolDto;
-  
+      const { name, status, startTime, endTime, shift, address, organization, hasProjector, hasLaptop } = createSchoolDto;
+
       await queryRunner.connect();
       await queryRunner.startTransaction();
-  
+
       const organizationRepo = queryRunner.manager.getRepository(Organization);
       const schoolRepo = queryRunner.manager.getRepository(School);
       const addressRepo = queryRunner.manager.getRepository(Address);
-  
-      const existingSchool = await schoolRepo.findOne({
-        where: {
-          name: name,
-          address: {
-            town: address.town,
-            tehsil: address.tehsil,
-            district: address.district,
-            state: address.state,
-          },
-        },
-        relations: ['address'],
-      });
-  
-      if (existingSchool) {
-        schoolRepo.merge(existingSchool, createSchoolDto);
-        await schoolRepo.save(existingSchool);
-        
-        await queryRunner.commitTransaction();
-  
-        return {
-          message: COMMON_MESSAGE.SUCCESSFULLY_UPDATED('School'),
-          data: existingSchool,
-        };
-      }
-  
+
       let newAddress = await addressRepo.findOne({
         where: {
           town: address.town,
@@ -61,43 +36,73 @@ export class SchoolService {
           address: address.address,
         },
       });
-  
+
       if (!newAddress) {
-        newAddress = addressRepo.create(address);
-        await addressRepo.save(newAddress);
+        newAddress = await addressRepo.save(address);
       }
-  
+
       let newOrganization = await organizationRepo.findOne({
         where: { name: organization.name },
       });
-  
+
       if (!newOrganization) {
-        newOrganization = organizationRepo.create(organization);
-        await organizationRepo.save(newOrganization);
+        newOrganization = await organizationRepo.save(organization);
       }
-  
-      const newSchool = schoolRepo.create({
-        ...createSchoolDto,
-        address: newAddress,
-        organization: newOrganization,
+
+      let school = await schoolRepo.findOne({
+        where: {
+          name: name,
+          address: {
+            town: address.town,
+            tehsil: address.tehsil,
+            district: address.district,
+            state: address.state,
+          },
+        },
+        relations: ['address', 'organization'],
       });
-  
-      const savedSchool = await schoolRepo.save(newSchool);
-  
+
+      if (!school) {
+        await schoolRepo.save({
+          name,
+          status,
+          startTime,
+          endTime,
+          shift,
+          addressId: newAddress.id,
+          organizationId: newOrganization.id,
+          hasProjector,
+          hasLaptop
+        });
+
+        school = await schoolRepo.findOne({
+          where: {
+            name: name,
+            address: {
+              town: address.town,
+              tehsil: address.tehsil,
+              district: address.district,
+              state: address.state,
+            },
+          },
+          relations: ['address', 'organization'],
+        });
+      }
+
       await queryRunner.commitTransaction();
-  
+
       return {
         message: COMMON_MESSAGE.SUCCESSFULLY_CREATED('School'),
-        data: savedSchool,
+        data: school,
       };
     } catch (error) {
       this.logger.error(error);
       await queryRunner.rollbackTransaction();
-  
+
       if (error?.code === '23505') {
         throw new ConflictException('Name already exists.');
       }
-  
+
       throw new InternalServerErrorException(error);
     } finally {
       await queryRunner.release();
@@ -107,13 +112,13 @@ export class SchoolService {
   async findAll(): Promise<ResponseDto> {
     try {
       const schoolRepo = this.queryRunner.getRepository(School);
-  
+
       const data = await schoolRepo
         .createQueryBuilder("school")
         .leftJoinAndSelect("school.organization", "organization")
         .leftJoinAndSelect("school.address", "address")
         .getMany();
-  
+
       return {
         message: COMMON_MESSAGE.SUCCESSFULLY_GET(School.name),
         data,
@@ -126,78 +131,59 @@ export class SchoolService {
 
   async update(id: number, updateSchoolDto: UpdateSchoolDto): Promise<ResponseDto> {
     const queryRunner = this.queryRunner.createQueryRunner();
-  
+
     try {
-      const { address, organization } = updateSchoolDto;
-  
+      const { address, organization, ...rest } = updateSchoolDto;
+
       await queryRunner.connect();
       await queryRunner.startTransaction();
-  
+
       const schoolRepo = queryRunner.manager.getRepository(School);
       const addressRepo = queryRunner.manager.getRepository(Address);
       const organizationRepo = queryRunner.manager.getRepository(Organization);
-  
-      const existingSchool = await schoolRepo.findOne({
+
+      let school = await schoolRepo.findOne({
         where: { id },
         relations: ['address', 'organization'],
       });
-  
-      if (!existingSchool) {
+
+      if (!school) {
         throw new NotFoundException(`School with ID ${id} not found`);
       }
-  
-      if (address) {
-        let existingAddress = await addressRepo.findOne({
-          where: {
-            town: address.town,
-            tehsil: address.tehsil,
-            district: address.district,
-            state: address.state,
-            address: address.address,
-          },
-        });
-  
-        if (!existingAddress) {
-          existingAddress = addressRepo.create(address);
-          await addressRepo.save(existingAddress);
-        }
-  
-        existingSchool.address = existingAddress;
-      }
-  
-      if (organization) {
-        let existingOrganization = await organizationRepo.findOne({
-          where: { name: organization.name },
-        });
-  
-        if (!existingOrganization) {
-          existingOrganization = organizationRepo.create(organization);
-          await organizationRepo.save(existingOrganization);
-        }
-  
-        existingSchool.organization = existingOrganization;
-      }
-  
-      schoolRepo.merge(existingSchool, updateSchoolDto);
 
-      const updatedSchool = await schoolRepo.save(existingSchool);
-  
+      if (address) {
+        await addressRepo.update({
+          id: school.address.id
+        }, { ...address });
+      }
+
+      if (organization) {
+        await organizationRepo.update({ id: school.organization.id }, { ...organization });
+      }
+
+      await schoolRepo.update(id, { ...rest });
+
+      school = await schoolRepo.findOne({
+        where: { id },
+        relations: ['address', 'organization']
+      });
+
       await queryRunner.commitTransaction();
-  
+
       return {
         message: COMMON_MESSAGE.SUCCESSFULLY_UPDATED('School'),
-        data: updatedSchool,
+        data: school,
       };
     } catch (error) {
       this.logger.error(error);
       await queryRunner.rollbackTransaction();
-  
+
       throw new InternalServerErrorException(error);
     } finally {
       await queryRunner.release();
     }
   }
-  
+
   async remove(id: number): Promise<ResponseDto> {
     const queryRunner = this.queryRunner.createQueryRunner();
 
